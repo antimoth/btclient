@@ -1,6 +1,8 @@
 package btclient
 
 import (
+	"encoding/hex"
+
 	"github.com/antimoth/btrpc/btcjson"
 	"github.com/antimoth/btrpc/rpcclient"
 	"github.com/antimoth/logger"
@@ -46,6 +48,72 @@ func (b *BitCoinClient) GetBlockCount() (int64, error) {
 	return b.c.GetBlockCount()
 }
 
+func (b *BitCoinClient) PreparedTxInfo(txHash *chainhash.Hash) (*PreparedTx, error) {
+	txVerbose, err := b.GetRawTransactionVerbose(txHash)
+	if err != nil {
+		return nil, err
+	}
+	serializedTx, err := hex.DecodeString(txVerbose.Hex)
+	if err != nil {
+		bcLogger.Error("decode tranx hex string errror", "hash", txHash.String())
+		return nil, err
+	}
+
+	// Deserialize the transaction and return it.
+	rawTx, err := btcutil.NewTxFromBytes(serializedTx)
+	if err != nil {
+		bcLogger.Error("deserialize tranx error", "hash", txHash.String())
+		return nil, err
+	}
+
+	preparedTx := PreparedTx{
+		Tx:        rawTx.MsgTx(),
+		BlockHash: txVerbose.BlockHash,
+	}
+
+	if txVerbose.BlockHash != EMPTY_STR {
+		blockInfo, err := b.GetBlockVerboseFromStr(txVerbose.BlockHash)
+		if err != nil {
+			return nil, err
+		}
+
+		sTxHash := txHash.String()
+		for ix, hash := range blockInfo.Tx {
+			if hash == sTxHash {
+				preparedTx.TxIx = ix
+				break
+			}
+		}
+		preparedTx.BlockHeight = blockInfo.Height
+		preparedTx.Confirmations = blockInfo.Confirmations
+
+	} else {
+		preparedTx.TxIx = UNKNOWN_TRANX_INDEX
+		preparedTx.BlockHeight = UNKNOWN_BLOCK_HEIGHT
+		preparedTx.Confirmations = UNKNOWN_CONFIRMATIONS
+	}
+
+	return &preparedTx, nil
+}
+
+func (b *BitCoinClient) PreparedTxInfoFromStr(sTxHash string) (*PreparedTx, error) {
+	return b.PreparedTxInfo(HexToHash(sTxHash))
+}
+
+func (b *BitCoinClient) GetRawTransaction(txHash *chainhash.Hash) (*btcutil.Tx, error) {
+	txRaw, err := b.c.GetRawTransaction(txHash)
+	if err != nil {
+		bcLogger.Error("GetRawTransaction error", "hash", txHash.String(), "e", err)
+		return nil, err
+	}
+	return txRaw, nil
+
+}
+
+func (b *BitCoinClient) GetRawTransactionFromStr(sTxHash string) (*btcutil.Tx, error) {
+	return b.GetRawTransaction(HexToHash(sTxHash))
+}
+
 //GetRawTransactionVerbose 根据txhash从区块链上查询交易数据（包含区块信息）
 func (b *BitCoinClient) GetRawTransactionVerbose(txHash *chainhash.Hash) (*btcjson.TxRawResult, error) {
 	txRaw, err := b.c.GetRawTransactionVerbose(txHash)
@@ -58,6 +126,23 @@ func (b *BitCoinClient) GetRawTransactionVerbose(txHash *chainhash.Hash) (*btcjs
 
 func (b *BitCoinClient) GetRawTransactionVerboseFromStr(sTxHash string) (*btcjson.TxRawResult, error) {
 	return b.GetRawTransactionVerbose(HexToHash(sTxHash))
+}
+
+func (b *BitCoinClient) GetBlock(blockHash *chainhash.Hash) (*wire.MsgBlock, error) {
+	blockInfo, err := b.c.GetBlock(blockHash)
+	if err != nil {
+		bcLogger.Error("GetBlockVerbose error", "hash", blockHash.String(), "e", err.Error())
+		return nil, err
+	}
+	return blockInfo, nil
+}
+
+func (b *BitCoinClient) GetBlockFromStr(sBlockHash string) (*wire.MsgBlock, error) {
+	return b.GetBlock(HexToHash(sBlockHash))
+}
+
+func (b *BitCoinClient) GetBlockFromHeight(height int64) (*wire.MsgBlock, error) {
+	return b.GetBlock(b.GetBlockHashFromHeight(height))
 }
 
 func (b *BitCoinClient) GetBlockVerbose(blockHash *chainhash.Hash) (*btcjson.GetBlockVerboseResult, error) {
